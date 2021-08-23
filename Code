@@ -1,0 +1,249 @@
+# Emily Thresher ----
+## Setup ----
+### Set working directory
+setwd("~/Documents/Career/USN_Test/2735153")
+getwd()
+
+### Install and load packages
+install.packages("dlookr")
+install.packages("mice") #imputation
+install.packages("dplyr")
+install.packages("caret") #partitioning
+install.packages("emmeans") #analyzing interaction terms
+install.packages("fastDummies") #applying dummy variables (comorbidities)
+library(fastDummies)
+library(dlookr) # if error occurs when loading dlookr, run install.packages("e1071")
+library(mice)
+library(dplyr)
+library(caret)
+library(emmeans)
+
+### Read in files
+USNtest.R <-
+  read.csv(file = "~/Documents/Career/USN_Test/2735153/R version/USNtest_R.csv", header = TRUE)
+head(USNtest.R)
+
+## Question One ---- 
+### Diagnose file
+#### diagnose gives a quick look at the data
+diagnose(USNtest.R) 
+
+### Change admitDate from character to date
+USNtest.R$admitDate <- as.Date(USNtest.R$admitDate, "%d-%b-%y")
+
+### Summary Statistics - continuous variables
+summary(USNtest.R$age) 
+summary(USNtest.R$systolic)
+#### Frequency & Mode
+sapply(USNtest.R, function (x)
+  length(unique(x)))
+sapply(USNtest.R, Mode)
+
+### Imputation for missing ages - ages seem to be added arbitrarily (ie Patient 4 is both 69 & 85)
+temp.data <- mice(
+  USNtest.R,
+  m = 5,
+  maxit = 50,
+  meth = 'pmm',
+  seed = 500
+)
+summary(temp.data)
+USNtest.R.complete <- complete(temp.data, 1) #combine imputation with existing data
+diagnose(USNtest.R.complete) #show no more missing values
+summary(USNtest.R.complete$age) 
+
+### Removing negative systolic blood pressures - not possible
+USNtest.R.complete <- filter(USNtest.R.complete, systolic >= 0) 
+
+### Re-do summary with missing values added
+#### Summary for true numeric data (average ICD codes don't make much sense)
+summary(USNtest.R.complete$age)
+summary(USNtest.R.complete$systolic)
+#### Frequency & Mode 
+sapply(USNtest.R.complete, function (x) #diagnosis codes not continuous variables
+  length(unique(x)))
+sapply(USNtest.R.complete, Mode) #most frequent diagnosis codes per column
+
+## Question 2 ----
+USNtest.R.over65 <- filter(USNtest.R.complete, age >= 65) #filter for age
+summary(USNtest.R.over65$age) #check minimum value is 65 or greater
+
+## Question 3 ----
+### Apply dummy variables for readmission within 30 days of index admission
+USNtest.R.over65$readmit <- 0
+numrows <- nrow(USNtest.R.over65)
+for (row in 1:(numrows - 1)) {
+  if (USNtest.R.over65$patientId[row] != USNtest.R.over65$patientId[row +1]) {  #different patients
+    USNtest.R.over65$readmit[row] <- 0  
+  } else if (USNtest.R.over65$admitDate[row + 1] %in%  #checks that admission dates are within readmission limit
+             USNtest.R.over65$admitDate[row]:USNtest.R.over65$admitDate[row] + 30) { 
+    USNtest.R.over65$readmit[row] <- 1      
+  } else {
+    USNtest.R.over65$readmit[row] <-0     #Same patient but dates don't match.
+  }
+}
+
+summary(USNtest.R.over65$readmit) #check 
+
+## Question 4 ----
+### Create vectors for the inclusion and exclusion criteria codes
+cabg.inc.codes = c(3610, 3611, 3612, 3613, 3614, 3615, 3616) #inclusion procedure codes
+cabg.exc.codes1 = paste(350, c(0:9), sep = '') #exclusion procedure code 1 - adding possible ending digits to prefix
+cabg.exc.codes2 = paste(351, c(0:9), sep = '') #exclusion procedure code 2 - adding possible ending digits to prefix
+cabg.exc.codes = append(cabg.exc.codes1, cabg.exc.codes2) #combining exclusion codes
+cabg.exc.codes = as.numeric(cabg.exc.codes) #converting from character to numeric
+
+### Assign dummy variables
+USNtest.R.over65 <- USNtest.R.over65 %>%
+  mutate(CABG = ((procedure1 %in% cabg.inc.codes)   #checking procedure columns for inclusion
+                 | (procedure2 %in% cabg.inc.codes)
+                 | (procedure3 %in% cabg.inc.codes)
+                 | (procedure4 %in% cabg.inc.codes)
+                 | (procedure5 %in% cabg.inc.codes)
+                 )
+                  & !((procedure1 %in% cabg.exc.codes) #checking procedure columns for exclusion and removing them
+                  | (procedure2 %in% cabg.exc.codes)
+                  | (procedure3 %in% cabg.exc.codes)
+                  | (procedure4 %in% cabg.exc.codes)
+                  | (procedure5 %in% cabg.exc.codes)
+     )) %>%
+  mutate(CABG = as.integer(CABG)) #convert Boolean to Binary
+
+## Question 5 ----
+### Load package
+install.packages("comorbidity")
+library(comorbidity)
+### combining diagnosis codes from individual columns to run through comorbidity formula
+### formula requires all diagnosis codes in one column and all patientIDs in one column
+diagnosis.1 <- USNtest.R.over65 %>%  
+  select(patientId, diagnosis1) %>%
+  rename(diagnosis = diagnosis1)
+diagnosis.2 <- USNtest.R.over65 %>%
+  select(patientId, diagnosis2) %>%
+  rename(diagnosis = diagnosis2)
+diagnosis.3 <- USNtest.R.over65 %>%
+  select(patientId, diagnosis3) %>%
+  rename(diagnosis = diagnosis3)
+diagnosis.4 <- USNtest.R.over65 %>%
+  select(patientId, diagnosis4) %>%
+  rename(diagnosis = diagnosis4)
+diagnosis.5 <- USNtest.R.over65 %>%
+  select(patientId, diagnosis5) %>%
+  rename(diagnosis = diagnosis5)
+
+combined.diagnoses <-  #combining renamed individual diagnosis columns
+  rbind(diagnosis.1,
+        diagnosis.2,
+        diagnosis.3,
+        diagnosis.4,
+        diagnosis.5)
+
+combined.diagnoses <-  #sorting by patientID
+  combined.diagnoses[order(combined.diagnoses$patientId), ]
+
+### Run comorbidity function
+comorbidities <-
+  comorbidity(
+    x = combined.diagnoses,
+    "patientId",
+    "diagnosis",
+    score = 'elixhauser',   #required score
+    assign0 =  FALSE,
+    icd = 'icd9',           #required ICD codes
+    factorise = TRUE        #gives the comorbidities as factors
+  )
+
+results <-dummy.cols(comorbidities, #add dummy variables for the comorbidities
+             remove.first.dummy = TRUE,
+             remove.selected.columns = TRUE)
+results <- results[, -(36:44)] #remove excess columns
+results <- results[, -(3:4)]
+
+USNtest.R.over65 <-   #add dummy variable & score columns to dataset
+  inner.join(USNtest.R.over65, results, by = "patientId")
+
+## Question 6 ----
+hospital.R <- #read in file
+  read.csv(file = "~/Documents/Career/USN_Test/2735153/R version/hospital_R.csv")
+
+USNtest.R.over65 <- #combine two files based on aha.id
+  inner.join(USNtest.R.over65, hospital.R, by = "aha.id")
+
+graph.data <- #get mean age per group for bar chart
+  aggregate(age ~ bdtot + CABG, data = USNtest.R.over65, FUN = mean)
+graph.data$bdtot <- as.numeric(graph.data$bdtot) #format bdtot as numeric
+graph.data$CABG <- as.factor(graph.data$CABG) #format CABG as factor
+ggplot(graph.data, aes(fill = CABG, y = age, x = bdtot)) + #create bar chart
+  geom_bar(position = "dodge",
+           stat = 'identity',
+           width = 10)
+
+## Question 7 ----
+### Format dataset
+CABG.patients <- filter(USNtest.R.over65, CABG == 1) #Filter for only CABG surgery
+summary(CABG.patients$CABG)
+
+### Test and train data sets
+set.seed(123) #ensure data stays the same
+data.t <-   #make sure that rate of admission is the same for both group 
+  createDataPartition(CABG.patients$readmit, 
+                      p = .7,
+                      list = FALSE,
+                      times = 1) 
+train.all <- CABG.patients[data.t, ] #used to create model
+test.all <- CABG.patients[-data.t, ] #used to test model
+
+
+### Initial model ----
+
+model.one <-
+  glm(readmit ~ (score * systolic), binomial(link = 'logit'), data = train.all) #binary dependent variable -> logistic regression
+temp <- summary(model.one)
+kable(temp$coefficients[abs(temp$coefficients[, 4]) <= 0.1,], caption ='Sig Coefficients', "rst") #score:systolic is only sig term
+predict.Y.one <- predict(model.one, test.all, type = "response") #gives predicted probabilities 
+y.pred.num <-ifelse(predict.Y.one > 0.5, 1, 0) #set at 50% as rate of admissions from USNtest.R.over65 is about that
+y.pred <- factor(y.pred.num, levels = c(0, 1)) 
+y.act <- test.all$readmit
+mean(y.pred == y.act) #model is 60% accurate at predicting
+
+### Intermediate models ----
+model.adj <- #just looking at interaction term
+  glm(readmit ~ score:systolic, binomial(link = 'logit'), data = train.all) #still significant on its own
+temp.adj <- summary(model.adj)
+kable(temp.adj$coefficients[abs(temp.adj$coefficients[, 4]) <= 0.1,], caption =
+        'Sig Coefficients', "rst")
+predict.Y.adj <- predict.glm(model.adj, test.all, type = 'response')
+y.pred.num.adj <- ifelse(predict.Y.adj > 0.5, 1, 0)
+y.pred.adj <- factor(y.pred.num.adj, levels = c(0, 1))
+y.act.adj <- test.all$readmit
+mean(y.pred.adj == y.act.adj) #prediction accuracy went down
+
+model.adj.2 <- #test just systolic
+  glm(readmit ~ systolic, binomial(link = 'logit'), data = train.all) #not significant on its own
+temp.adj.2 <- summary(model.adj.2)
+kable(temp.adj.2$coefficients[abs(temp.adj.2$coefficients[, 4]) <= 0.1,], caption =
+        'Sig Coefficients', "rst")
+predict.Y.adj.2 <-predict.glm(model.adj.2, test.all, type = 'response')
+y.pred.num.adj.2 <- ifelse(predict.Y.adj.2 > 0.5, 1, 0)
+y.pred.adj.2 <- factor(y.pred.num.adj.2, levels = c(0, 1))
+y.act.adj.2 <- test.all$readmit
+mean(y.pred.adj.2 == y.act.adj.2) #prediction accuracy went down
+
+### Final Model ----
+model.final <-   #just score on its own
+  glm(readmit ~ score, binomial(link = "logit"), data = train.all)
+temp.final <- summary(model.final)
+kable(temp.final$coefficients[abs(temp.final$coefficients[, 4]) <= 0.1,], caption =
+        'Sig Coefficients', "rst") #score on its own is significant
+predict.Y.final <- predict(model.final, test.all, type = "response")
+y.pred.num.final <- ifelse(predict.Y.final > 0.5, 1, 0)
+y.pred.final <- factor(y.pred.num.final, levels = c(0, 1))
+y.act.final <- test.all$readmit
+mean(y.pred.final == y.act.final) #prediction accuracy the same as original model
+
+plot(CABG.patients$score,CABG.patients$systolic) #fairly even distribution of systolic blood pressures across scores
+plot(CABG.patients$score, CABG.patients$readmit) #similar here
+plot(CABG.patients$systolic, CABG.patients$readmit) #similar here
+
+### Adding predictions
+CABG.patients$risk <- predict(model.final,CABG.patients,type="response")
