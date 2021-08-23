@@ -1,0 +1,12 @@
+Questions for code
+
+1) Create descriptive statistics for the above variables, and run any other code you would normally use to evaluate quality of newly imported data. Describe any concerns you may have about the suitability of this dataset for further analysis.
+2) Subset the data to include only those patients age 65 or older (>=). Save this new dataset separately, and use it for the rest of the exercise.
+3) Create a dummy variable indicating whether each admission involves a readmission, defined as a subsequent hospitalization for the same patientId within 30 days of the index admission.
+4) Create a dummy variable indicating whether each admission involved coronary artery bypass graft (CABG) surgery:
+● Inclusion criteria are any procedure code in the following group: 3610, 3611, 3612, 3613,
+3614, 3615, 3616.
+● Exclusion criteria are any procedure code where the first three characters are 350 or 351.
+5) Install and load the R package “comorbidity” (install.packages("comorbidity"); library(comorbidity)). Using the ICD-9 option and the Elixhauser score option, creating binary variables to flag each elixhauser comorbidity and a count of comorbidities.
+6) Merge the hospital_R.csv file to your data. Create a bar graph of average age by bed count for CABG and non-CABG patients and briefly describe your observations in a few sentences.
+7) Specify and run a regression model that estimates risk of readmission among patients undergoing CABG surgery, controlling for systolic blood pressure and the number of Elixhauser comorbidities in the admission record. Update the dataset with a predicted probability of readmission for each patient undergoing CABG surgery.
